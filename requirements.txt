@@ -1,4 +1,10 @@
-gradio_client
-python-dotenv
-huggingface_hub
+pandas
 requests
+beautifulsoup4
+nltk
+transformers
+sentence_transformers
+language_tool_python
+torch
+huggingface_hub
+python-dotenv
