@@ -1421,7 +1421,7 @@ def scrape_job_details(job_url):
         application_url = application_url_elem.get('href', '') if application_url_elem else ""
         if application_url:
             if application_url.startswith('/'):
-                application_url = 'https://www.myjobmag.com' + application_url
+                application_url = 'https://www.myjobmag.co.ke' + application_url
             application_url = clean_application_url(application_url)
             if not validate_application_method(application_url):
                 application_url = ""
@@ -1429,7 +1429,7 @@ def scrape_job_details(job_url):
         application = application_url if application_url else extracted_email if extracted_email else ""
         if not application:
             logger.warning(f"No valid application method extracted for job URL: {job_url}")
-        company_urls = ['https://www.myjobmag.com' + a.get('href') for a in soup.select('#printable > a') if a.get('href')]
+        company_urls = ['https://www.myjobmag.co.ke' + a.get('href') for a in soup.select('#printable > a') if a.get('href')]
         company_data = {}
         if company_urls:
             try:
@@ -1437,7 +1437,7 @@ def scrape_job_details(job_url):
                 company_resp.raise_for_status()
                 company_soup = BeautifulSoup(company_resp.text, 'html.parser')
                 company_data['company_name'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > h1').text.replace("Recruitment", "").strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > h1') else company_name
-                company_data['company_logo'] = ['https://www.myjobmag.com' + img.get('src') for img in company_soup.select('#wrap-comp-jobs > div.company-jobs > div.company-logo > img') if img.get('src') and (img.get('src').lower().endswith('.png') or img.get('src').lower().endswith('.jpg') or img.get('src').lower().endswith('.jpeg'))]
+                company_data['company_logo'] = ['https://www.myjobmag.co.ke' + img.get('src') for img in company_soup.select('#wrap-comp-jobs > div.company-jobs > div.company-logo > img') if img.get('src') and (img.get('src').lower().endswith('.png') or img.get('src').lower().endswith('.jpg') or img.get('src').lower().endswith('.jpeg'))]
                 company_data['company_industry'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(1) > span.comp-info-desc > a').text.strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(1) > span.comp-info-desc > a') else ""
                 company_data['company_founded'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(2) > span.comp-info-desc').text.strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(2) > span.comp-info-desc') else ""
                 company_data['company_type'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(3) > span.comp-info-desc').text.strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(3) > span.comp-info-desc') else ""
@@ -1449,7 +1449,7 @@ def scrape_job_details(job_url):
                     website_text_elem = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(4) > span.comp-info-desc')
                     if website_text_elem:
                         company_website = website_text_elem.text.strip()
-                excluded_domains = ['mysalaryscale.com', 'myjobmag.com', 'linkedin.com', 'twitter.com', 'facebook.com']
+                excluded_domains = ['mysalaryscale.com', 'myjobmag.co.ke', 'linkedin.com', 'twitter.com', 'facebook.com']
                 if company_website:
                     company_website = clean_application_url(company_website)
                     if any(domain in company_website.lower() for domain in excluded_domains):
@@ -1510,12 +1510,12 @@ def crawl_and_process():
     print(f"Loaded {len(kenya_processed_job_ids)} previously processed Job IDs, {len(processed_job_urls)} URLs, and {len(processed_companies)} companies")
     start_page = load_last_processed_page()
     for i in range(start_page, 0, -1):
-        url = f'https://www.myjobmag.com/page/{i}'
+        url = f'https://www.myjobmag.co.ke/page/{i}'
         try:
             resp = requests.get(url, headers=HEADERS, timeout=10)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, 'html.parser')
-            job_links = ['https://www.myjobmag.com' + a.get('href') for a in soup.select('li.mag-b > h2 > a') if a.get('href')]
+            job_links = ['https://www.myjobmag.co.ke' + a.get('href') for a in soup.select('li.mag-b > h2 > a') if a.get('href')]
             print(f"Collected {len(job_links)} job URLs from page {i}")
             for index, job_url in enumerate(job_links):
                 job_number = index + 1
