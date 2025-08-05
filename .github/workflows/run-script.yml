@@ -3,9 +3,13 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */6 * * *' # Every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
 jobs:
   run-python:
     runs-on: ubuntu-latest
+    timeout-minutes: 360 # Max 6 hours
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -21,10 +25,23 @@ jobs:
         run: python -c "import nltk; nltk.download('punkt_tab'); nltk.download('averaged_perceptron_tagger')"
       - name: Install Java for LanguageTool
         run: sudo apt-get update && sudo apt-get install -y openjdk-11-jre
+      - name: Clear Hugging Face cache
+        run: rm -rf ~/.cache/huggingface/hub
+      - name: Download previous processed IDs
+        uses: actions/download-artifact@v4
+        with:
+          name: processed-ids
+          path: .
+        continue-on-error: true
       - name: Run script
         run: python scripts/script.py
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
+      - name: Upload processed IDs
+        uses: actions/upload-artifact@v4
+        with:
+          name: processed-ids
+          path: southafrica_processed_job_ids.csv
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
