@@ -15,7 +15,6 @@ from urllib3.util.retry import Retry
 import warnings
 import logging
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
-from transformers import AutoTokenizer, AutoModelForCausalLM
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from sentence_transformers import SentenceTransformer, util
 import language_tool_python
@@ -54,13 +53,11 @@ except LookupError:
 tool = language_tool_python.LanguageTool('en-US')
 
 
-#login(token="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")
 
 # Initialize model and tokenizer
 device = torch.device("cpu")  # Always CPU
 model_name = "google/flan-t5-large"
 tokenizer = AutoTokenizer.from_pretrained(model_name)
-#model = AutoModelForCausalLM.from_pretrained(model_name)
 model = AutoModelForSeq2SeqLM.from_pretrained(model_name)
 model.eval()
 model.to(device)
@@ -77,7 +74,6 @@ WP_MEDIA_URL = "https://kenya.mimusjobs.com/wp-json/wp/v2/media"
 WP_USERNAME = "admin"
 WP_APP_PASSWORD = "Xljs I1VY 7XL0 F45N 3Wsv 5qcv"
 PROCESSED_IDS_FILE = "kenya_processed_job_ids.csv"
-LAST_PAGE_FILE = "last_processed_page.txt"
 HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/96.0.4664.93 Safari/537.36'
 }
@@ -155,12 +151,10 @@ def contains_nouns(paraphrase, required_nouns):
     paraphrase_lower = paraphrase.lower()
     return all(noun.lower() in paraphrase_lower for noun in required_nouns)
 
-
 def extract_capitalized_words(text):
     """Extract words with specific capitalization (e.g., proper nouns, acronyms) from the input text."""
     import re
     words = re.findall(r'\b[A-Z][a-zA-Z]*\b', text)  # Matches words starting with a capital letter
-    # Filter out common words that shouldn't be enforced (e.g., sentence starters may need adjustment)
     return {word: word for word in words if len(word) > 1}  # Dictionary to map lowercase to original case
 
 def restore_capitalization(paraphrased, capitalized_words):
@@ -168,11 +162,9 @@ def restore_capitalization(paraphrased, capitalized_words):
     paraphrased_lower = paraphrased.lower()
     result = paraphrased
     for lower_word, orig_word in capitalized_words.items():
-        # Replace case-insensitive occurrences with the original capitalized form
         pattern = r'\b' + re.escape(lower_word) + r'\b'
         result = re.sub(pattern, orig_word, result, flags=re.IGNORECASE)
     return result
-
 
 def paraphrase_strict_title(title, max_attempts=3, max_sub_attempts=2):
     def has_repetitions(text):
@@ -340,8 +332,6 @@ def paraphrase_strict_title(title, max_attempts=3, max_sub_attempts=2):
 
     print("❌ Fallback to original title.\n")
     return clean_title
-
-
 
 def paraphrase_strict_company(text, max_attempts=2, max_sub_attempts=2):
     def contains_prompt(para):
@@ -886,33 +876,6 @@ def save_processed_job_id(job_id, job_url, company_name, url_page, job_number):
         print(f"Error saving Job ID {job_id}: {str(e)}")
         raise
 
-def save_last_processed_page(page_number):
-    try:
-        with open(LAST_PAGE_FILE, 'w') as f:
-            f.write(str(page_number))
-        logger.info(f"Saved last processed page: {page_number} to {LAST_PAGE_FILE}")
-    except Exception as e:
-        logger.error(f"Error saving last processed page {page_number}: {str(e)}")
-        print(f"Error saving last processed page {page_number}: {str(e)}")
-
-def load_last_processed_page():
-    if not os.path.exists(LAST_PAGE_FILE):
-        logger.info(f"{LAST_PAGE_FILE} does not exist. Defaulting to page 3000.")
-        return 3000
-    try:
-        with open(LAST_PAGE_FILE, 'r') as f:
-            page = f.read().strip()
-            page_number = int(page)
-            if page_number < 1 or page_number > 3000:
-                logger.warning(f"Invalid page number {page_number} in {LAST_PAGE_FILE}. Defaulting to 3000.")
-                return 3000
-            logger.info(f"Loaded last processed page: {page_number} from {LAST_PAGE_FILE}")
-            return page_number
-    except (ValueError, Exception) as e:
-        logger.error(f"Error reading {LAST_PAGE_FILE}: {str(e)}. Defaulting to 3000.")
-        print(f"Error reading {LAST_PAGE_FILE}: {str(e)}. Defaulting to 3000.")
-        return 3000
-
 def validate_application_method(value, is_email=False):
     if not value:
         return False
@@ -1048,14 +1011,12 @@ def paraphrase_title_and_description(title, description, index, max_attempts=5):
     print("\nStep 2: Paraphrasing Title and Description Separately")
     print("-" * 30)
 
-    # Paraphrase the title
     try:
         print(f"Paraphrasing Job Title: {title}")
         paraphrased_title = paraphrase_strict_title(title, max_attempts=max_attempts)
         logger.debug(f"Raw paraphrased title: {paraphrased_title}")
         print(f"Paraphrased Job Title: {paraphrased_title}")
 
-        # Truncate long titles
         words = paraphrased_title.split()
         if len(words) > 30:
             words = words[:30]
@@ -1071,7 +1032,6 @@ def paraphrase_title_and_description(title, description, index, max_attempts=5):
         print(f"Error paraphrasing title: {str(e)}. Falling back to original title.")
         rewritten_title = title
 
-    # Paraphrase the description
     try:
         print(f"Paraphrasing Job Description: {description}")
         paraphrased_description = paraphrase_strict_description(description, max_attempts=max_attempts)
@@ -1173,7 +1133,7 @@ def save_company_to_wordpress(index, company_data):
         paraphrased_details = paraphrase_strict_company(company_details, max_attempts=5)
 
         paraphrased_details = re.sub(r'Job Title:\s*[^\n]*\n*', '', paraphrased_details, flags=re.IGNORECASE)
-        paraphrased_details = re.sub(r'Job Description:\s*', '', paraphrased_details, flags=re.IGNORECASE)
+        paraphrased_details = re.sub(r'Job Description:\s*', '', paraphrased_details, flags=re8222.IGNORECASE)
         sentences = nltk.sent_tokenize(paraphrased_details)
         paragraphs = []
         current_paragraph = []
@@ -1421,7 +1381,7 @@ def scrape_job_details(job_url):
         application_url = application_url_elem.get('href', '') if application_url_elem else ""
         if application_url:
             if application_url.startswith('/'):
-                application_url = 'https://www.myjobmag.co.ke' + application_url
+                application_url = 'https://www.myjobmag.co.za' + application_url
             application_url = clean_application_url(application_url)
             if not validate_application_method(application_url):
                 application_url = ""
@@ -1429,7 +1389,7 @@ def scrape_job_details(job_url):
         application = application_url if application_url else extracted_email if extracted_email else ""
         if not application:
             logger.warning(f"No valid application method extracted for job URL: {job_url}")
-        company_urls = ['https://www.myjobmag.co.ke' + a.get('href') for a in soup.select('#printable > a') if a.get('href')]
+        company_urls = ['https://www.myjobmag.co.za' + a.get('href') for a in soup.select('#printable > a') if a.get('href')]
         company_data = {}
         if company_urls:
             try:
@@ -1437,7 +1397,7 @@ def scrape_job_details(job_url):
                 company_resp.raise_for_status()
                 company_soup = BeautifulSoup(company_resp.text, 'html.parser')
                 company_data['company_name'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > h1').text.replace("Recruitment", "").strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > h1') else company_name
-                company_data['company_logo'] = ['https://www.myjobmag.co.ke' + img.get('src') for img in company_soup.select('#wrap-comp-jobs > div.company-jobs > div.company-logo > img') if img.get('src') and (img.get('src').lower().endswith('.png') or img.get('src').lower().endswith('.jpg') or img.get('src').lower().endswith('.jpeg'))]
+                company_data['company_logo'] = ['https://www.myjobmag.co.za' + img.get('src') for img in company_soup.select('#wrap-comp-jobs > div.company-jobs > div.company-logo > img') if img.get('src') and (img.get('src').lower().endswith('.png') or img.get('src').lower().endswith('.jpg') or img.get('src').lower().endswith('.jpeg'))]
                 company_data['company_industry'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(1) > span.comp-info-desc > a').text.strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(1) > span.comp-info-desc > a') else ""
                 company_data['company_founded'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(2) > span.comp-info-desc').text.strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(2) > span.comp-info-desc') else ""
                 company_data['company_type'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(3) > span.comp-info-desc').text.strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(3) > span.comp-info-desc') else ""
@@ -1449,73 +1409,74 @@ def scrape_job_details(job_url):
                     website_text_elem = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(4) > span.comp-info-desc')
                     if website_text_elem:
                         company_website = website_text_elem.text.strip()
-                excluded_domains = ['mysalaryscale.com', 'myjobmag.co.ke', 'linkedin.com', 'twitter.com', 'facebook.com']
+                excluded_domains = ['mysalaryscale.com', 'myjobmag.co.za', 'linkedin.com', 'twitter.com', 'facebook.com']
                 if company_website:
                     company_website = clean_application_url(company_website)
-                    if any(domain in company_website.lower() for domain in excluded_domains):
+                    if any(domain in company_website for domain in excluded_domains) or not validate_application_method(company_website):
                         company_website = ""
-                    elif validate_application_method(company_website):
-                        company_data['company_website'] = company_website
-                    else:
-                        company_website = ""
-                else:
-                    company_website = ""
                 company_data['company_website'] = company_website
                 company_data['company_address'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(5) > span.comp-info-desc').text.strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-right > ul > li:nth-child(5) > span.comp-info-desc') else ""
-                company_data['company_details'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.mag-b.fl-r.ts-13.tc-b6.bm-b-35').text.strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.mag-b.fl-r.ts-13.tc-b6.bm-b-35') else ""
-            except Exception as e:
-                print(f"Error fetching company details from {company_urls[0]}: {str(e)}")
-                logger.error(f"Error fetching company details from {company_urls[0]}: {str(e)}")
+                company_data['company_details'] = company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-left').text.strip() if company_soup.select_one('#wrap-comp-jobs > div.company-jobs > div.company-details-left') else ""
+            except RequestException as e:
+                logger.error(f"Error scraping company details from {company_urls[0]}: {str(e)}")
                 company_data = {
                     'company_name': company_name,
                     'company_logo': [],
-                    'company_industry': "",
-                    'company_founded': "",
-                    'company_type': "",
-                    'company_website': "",
-                    'company_address': "",
-                    'company_details': ""
+                    'company_industry': '',
+                    'company_founded': '',
+                    'company_type': '',
+                    'company_website': '',
+                    'company_address': '',
+                    'company_details': ''
                 }
-        job_id = hashlib.md5(job_url.encode()).hexdigest()[:16]
-        return {
-            'Job ID': job_id,
-            'Job Title': job_title_clean,
-            'Job Description': job_description,
-            'Job Type': job_type,
-            'Job Qualifications': job_qualifications,
-            'Job Experiences': job_experiences,
-            'Location': job_locations,
-            'Job Fields': job_fields,
-            'Date Posted': date_posted_str,
-            'Deadline': deadline,
-            'Application': application,
-            'Company': company_data.get('company_name', company_name),
-            'Company Logo': ', '.join(company_data.get('company_logo', [])),
-            'Company Industry': company_data.get('company_industry', ''),
-            'Company Founded': company_data.get('company_founded', ''),
-            'Company Type': company_data.get('company_type', ''),
-            'Company Website': company_data.get('company_website', ''),
-            'Company Address': company_data.get('company_address', ''),
-            'Company Details': company_data.get('company_details', ''),
-            'Job URL': job_url,
-            'New Date String': new_date_string
-        }, company_data
-    except Exception as e:
-        print(f"Error scraping job details from {job_url}: {str(e)}")
+        else:
+            company_data = {
+                'company_name': company_name,
+                'company_logo': [],
+                'company_industry': '',
+                'company_founded': '',
+                'company_type': '',
+                'company_website': '',
+                'company_address': '',
+                'company_details': ''
+            }
+        job_data = {
+            "Job Title": sanitize_text(job_title_clean),
+            "Company": company_name,
+            "Job Type": job_type,
+            "Location": job_locations,
+            "Qualifications": job_qualifications,
+            "Experience": job_experiences,
+            "Field": job_fields,
+            "Date Posted": date_posted_str,
+            "Deadline": deadline,
+            "Job Description": sanitize_text(job_description),
+            "Application": application,
+            "Company Logo": company_data.get('company_logo', [''])[0],
+            "Company Website": company_data.get('company_website', ''),
+            "Company Details": company_data.get('company_details', ''),
+            "Job URL": job_url,
+            "Job ID": hashlib.md5(job_url.encode()).hexdigest()
+        }
+        logger.debug(f"Scraped job details: {job_data}")
+        logger.debug(f"Scraped company details: {company_data}")
+        return job_data, company_data
+    except RequestException as e:
         logger.error(f"Error scraping job details from {job_url}: {str(e)}")
         return None, None
 
 def crawl_and_process():
     kenya_processed_job_ids, processed_job_urls, processed_companies = load_kenya_processed_job_ids()
     print(f"Loaded {len(kenya_processed_job_ids)} previously processed Job IDs, {len(processed_job_urls)} URLs, and {len(processed_companies)} companies")
-    start_page = load_last_processed_page()
-    for i in range(start_page, 0, -1):
-        url = f'https://www.myjobmag.co.ke/page/{i}'
+    
+    # Define the page range to scrape (pages 1 to 5)
+    for i in range(1, 6):
+        url = f'https://www.myjobmag.co.za/page/{i}'
         try:
             resp = requests.get(url, headers=HEADERS, timeout=10)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, 'html.parser')
-            job_links = ['https://www.myjobmag.co.ke' + a.get('href') for a in soup.select('li.mag-b > h2 > a') if a.get('href')]
+            job_links = ['https://www.myjobmag.co.za' + a.get('href') for a in soup.select('li.mag-b > h2 > a') if a.get('href')]
             print(f"Collected {len(job_links)} job URLs from page {i}")
             for index, job_url in enumerate(job_links):
                 job_number = index + 1
@@ -1577,24 +1538,25 @@ def crawl_and_process():
                 if job_number % 10 == 0:
                     logger.info("Pausing for 30 seconds to avoid server overload")
                     time.sleep(30)
-            save_last_processed_page(i)
         except Exception as e:
             print(f"Error crawling page {url}: {str(e)}")
             logger.error(f"Error crawling page {url}: {str(e)}")
-            save_last_processed_page(i)
             continue
-    save_last_processed_page(0)
 
 def main():
-    max_cycles = 10
     cycle_count = 0
-    while cycle_count < max_cycles:
-        print(f"\nStarting cycle {cycle_count + 1} of job processing...")
-        crawl_and_process()
+    while True:
         cycle_count += 1
-        print(f"\nAll jobs processed for cycle {cycle_count}. Waiting 5 minutes before starting the next cycle...")
-        time.sleep(300)
-    print("Reached maximum cycles. Exiting.")
+        print(f"\nStarting cycle {cycle_count} of job processing at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        try:
+            crawl_and_process()
+            print(f"Completed cycle {cycle_count}. Waiting 2 hours before restarting...")
+            time.sleep(2 * 60 * 60)  # Wait 2 hours (7200 seconds)
+        except Exception as e:
+            logger.error(f"Error in cycle {cycle_count}: {str(e)}")
+            print(f"Error in cycle {cycle_count}: {str(e)}")
+            print("Retrying after 2 hours...")
+            time.sleep(2 * 60 * 60)  # Wait 2 hours before retrying
 
 if __name__ == "__main__":
     main()
