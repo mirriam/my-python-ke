@@ -39,20 +39,18 @@ console_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(
 logger.addHandler(console_handler)
 warnings.filterwarnings("ignore", category=requests.packages.urllib3.exceptions.InsecureRequestWarning)
 
-# Download NLTK punkt_tab and averaged_perceptron_tagger if not already present
+# Download NLTK resources
 try:
     nltk.data.find('tokenizers/punkt_tab')
 except LookupError:
     nltk.download('punkt_tab')
 try:
-    nltk.data.find('taggers/averaged_perceptron_tagger')
+    nltk.data.find('taggers/averaged_perceptron_tagger_eng')
 except LookupError:
-    nltk.download('averaged_perceptron_tagger')
+    nltk.download('averaged_perceptron_tagger_eng')
 
 # Initialize language tool
 tool = language_tool_python.LanguageTool('en-US')
-
-
 
 # Initialize model and tokenizer
 device = torch.device("cpu")  # Always CPU
@@ -152,10 +150,9 @@ def contains_nouns(paraphrase, required_nouns):
     return all(noun.lower() in paraphrase_lower for noun in required_nouns)
 
 def extract_capitalized_words(text):
-    """Extract words with specific capitalization (e.g., proper nouns, acronyms) from the input text."""
-    import re
-    words = re.findall(r'\b[A-Z][a-zA-Z]*\b', text)  # Matches words starting with a capital letter
-    return {word: word for word in words if len(word) > 1}  # Dictionary to map lowercase to original case
+    """Extract words with specific capitalization (e.g., proper nouns, acronyms)."""
+    words = re.findall(r'\b[A-Z][a-zA-Z]*\b', text)
+    return {word: word for word in words if len(word) > 1}
 
 def restore_capitalization(paraphrased, capitalized_words):
     """Restore original capitalization of specified words in the paraphrased text."""
@@ -165,6 +162,13 @@ def restore_capitalization(paraphrased, capitalized_words):
         pattern = r'\b' + re.escape(lower_word) + r'\b'
         result = re.sub(pattern, orig_word, result, flags=re.IGNORECASE)
     return result
+
+def score_paraphrase(original, paraphrased, target_wc):
+    """Calculate score for paraphrased text based on similarity and length."""
+    sim = is_good_paraphrase(original, paraphrased)
+    wc = len(paraphrased.split())
+    length_penalty = abs(wc - target_wc) / max(target_wc, 1)
+    return (sim + (1 - length_penalty)) / 2, sim, wc
 
 def paraphrase_strict_title(title, max_attempts=3, max_sub_attempts=2):
     def has_repetitions(text):
@@ -183,8 +187,8 @@ def paraphrase_strict_title(title, max_attempts=3, max_sub_attempts=2):
             "Rewrite the following", "Paraphrased title", "Professionally rewrite",
             "Keep it short", "Use different phrasing", "Short (5–12 words)",
             "Paraphrase", "Paraphrased", "Paraphrasing", "Paraphrased version",
-            "Summary", "Summarised", "Summarized", "Summarizing", "Summarising","None.","None","none",
-            ".",":"
+            "Summary", "Summarised", "Summarized", "Summarizing", "Summarising",
+            "None.", "None", "none", ".", ":"
         ]
         for phrase in critical_phrases:
             if phrase.lower() in text_lower:
@@ -198,12 +202,6 @@ def paraphrase_strict_title(title, max_attempts=3, max_sub_attempts=2):
                     context_snippet = context_snippet + "..."
                 return True, phrase, context_snippet
         return False, None, None
-
-    def score_paraphrase(original, paraphrased, target_wc):
-        sim = is_good_paraphrase(original, paraphrased)
-        wc = len(paraphrased.split())
-        length_penalty = abs(wc - target_wc) / max(target_wc, 1)
-        return (sim + (1 - length_penalty)) / 2, sim, wc
 
     clean_title = sanitize_text(title)
     if not clean_title:
@@ -275,8 +273,8 @@ def paraphrase_strict_title(title, max_attempts=3, max_sub_attempts=2):
 
                     is_banned, banned_phrase, context_snippet = contains_banned_phrase(paraphrased, [])
                     if is_banned:
-                        logger.info(f"⛔ Rejected due to banned phrase '{banned_phrase}' in context: '{context_snippet}' in output: \"{paraphrased}\"")
-                        print(f"⛔ Rejected due to banned phrase '{banned_phrase}' in context: '{context_snippet}' in output: \"{paraphrased}\"")
+                        logger.info(f"⛔ Rejected due to banned phrase '{banned_phrase}' in context: '{context_snippet}'")
+                        print(f"⛔ Rejected due to banned phrase '{banned_phrase}' in context: '{context_snippet}'")
                         continue
                     if has_repetitions(paraphrased):
                         logger.info(f"⛔ Rejected due to repeated phrases: \"{paraphrased}\"")
@@ -346,7 +344,7 @@ def paraphrase_strict_company(text, max_attempts=2, max_sub_attempts=2):
             "Tone and structure",
             "Keep the length approximately the same",
             "Do your company information paragraph need improvements",
-            "Paraphrase", "Paraphrased", "Paraphrasing", "Paragraph", "Company details",
+            "Paraphrase", "Paraphrased", "Paraphrasing", "Paragraph", "Company details"
         ]
         para_lower = para.lower()
         for phrase in prompt_phrases:
@@ -426,85 +424,94 @@ def paraphrase_strict_company(text, max_attempts=2, max_sub_attempts=2):
                             do_sample=True,
                             top_k=40,
                             top_p=0.95,
-                            temperature=0.9 + 0.1 * sub_attempt,
-                            repetition_penalty=1.1,
-                            no_repeat_ngram_size=2,
+                            temperature=0.8 + 0.1 * sub_attempt,
+                            repetition_penalty=1.2,
+                            no_repeat_ngram_size=3,
                             num_return_sequences=MAX_RETURN_SEQUENCES
                         )
 
-                    decoded = [tokenizer.decode(seq, skip_special_tokens=True).strip() for seq in output]
+                    decoded_outputs = [
+                        tokenizer.decode(seq, skip_special_tokens=True).strip()
+                        for seq in output
+                    ]
 
-                    for option_index, d in enumerate(decoded):
+                    for idx2, d in enumerate(decoded_outputs):
                         paraphrased = d.replace(prompt, "").strip() if prompt in d else d.strip()
                         paraphrased = clean_description(paraphrased)
                         paraphrased = restore_capitalization(paraphrased, capitalized_words)
 
-                        if not paraphrased or len(paraphrased.split()) < 5:
-                            logger.info(f"⛔ Rejected due to empty or too short: \"{paraphrased}\"")
+                        if not paraphrased or len(paraphrased.split()) < 1:
+                            logger.info(f"⛔ Paragraph {idx + 1} rejected due to empty or too short: \"{paraphrased}\"")
                             continue
+
                         is_banned, banned_phrase, context_snippet = contains_prompt(paraphrased)
                         if is_banned:
-                            print(f"❌ Rejected due to prompt echo (phrase: '{banned_phrase}' in context: '{context_snippet}' in output: \"{paraphrased}\")")
-                            logger.info(f"❌ Rejected due to prompt echo (phrase: '{banned_phrase}' in context: '{context_snippet}' in output: \"{paraphrased}\")")
+                            logger.info(f"⛔ Paragraph {idx + 1} rejected due to banned phrase '{banned_phrase}' in context: '{context_snippet}'")
+                            print(f"⛔ Paragraph {idx + 1} rejected due to banned phrase '{banned_phrase}' in context: '{context_snippet}'")
+                            continue
+                        if not is_grammatically_correct(paraphrased):
+                            logger.info(f"⛔ Paragraph {idx + 1} rejected due to grammar: \"{paraphrased}\"")
                             continue
 
-                        word_count = len(paraphrased.split())
-                        similarity = is_good_paraphrase(para, paraphrased)
-                        score = (similarity + (1 - abs(word_count - target_word_count) / max(target_word_count, 1))) / 2
+                        score, sim, wc = score_paraphrase(para, paraphrased, target_word_count)
+                        first_diff = not paraphrased.lower().startswith(para.lower())
 
-                        first_sentence = paraphrased.split(".")[0].strip()
-                        original_first = para.split(".")[0].strip()
-                        first_diff = not first_sentence.lower().startswith(original_first.lower())
-
-                        print(f"📝 Attempt {attempt + 1}.{sub_attempt + 1}, Option {option_index + 1}")
-                        print(f"↪ Words: {word_count}, Sim: {similarity:.2f}, Score: {score:.2f}, First sentence different: {first_diff}")
-                        print(f"→ First sentence: {first_sentence}\n")
+                        print(f"📝 Paragraph {idx + 1}, Attempt {attempt + 1}.{sub_attempt + 1}, Option {idx2 + 1}")
+                        print(f"↪ Words: {wc}, Sim: {sim:.2f}, Score: {score:.2f}, First different: {first_diff}")
+                        print(f"→ Paraphrased: {paraphrased}\n")
 
                         is_valid = (
-                            min_wc <= word_count <= max_wc
-                            and similarity >= (0.65 if target_word_count > 10 else 0.6)
+                            min_wc <= wc <= max_wc
+                            and sim >= 0.65
                             and first_diff
-                            and is_grammatically_correct(paraphrased)
                         )
 
                         if is_valid:
-                            print(f"✅ Picked from attempt {attempt + 1}.{sub_attempt + 1}, option {option_index + 1}")
-                            final_paraphrased.append(clean_description(paraphrased))
+                            print(f"✅ Paragraph {idx + 1} picked from attempt {attempt + 1}.{sub_attempt + 1}, option {idx2 + 1}")
+                            print(f"→ {paraphrased}\n")
+                            final_paraphrased.append(paraphrased)
                             valid_paraphrase_found = True
                             break
 
                         if first_diff and score > best_score:
                             best_score = score
                             best_paraphrase = paraphrased
-                            best_attempt = f"{attempt + 1}.{sub_attempt + 1}, option {option_index + 1}"
+                            best_attempt = f"{attempt + 1}.{sub_attempt + 1}, option {idx2 + 1}"
                             best_metadata = (
-                                f"↪ Words: {word_count}, Sim: {similarity:.2f}, Score: {score:.2f}, First sentence different: {first_diff}\n"
-                                f"→ First sentence: {first_sentence}"
+                                f"↪ Words: {wc}, Sim: {sim:.2f}, Score: {score:.2f}, First different: {first_diff}\n"
+                                f"→ Paraphrased: {paraphrased}"
                             )
 
-                    if not valid_paraphrase_found:
-                        sub_attempt += 1
-                        time.sleep(0.5 * (2 ** sub_attempt))
+                    if valid_paraphrase_found:
+                        break
+
+                    sub_attempt += 1
+                    time.sleep(0.5 * (2 ** sub_attempt))
 
                 except Exception as e:
-                    logger.error(f"Error during attempt {attempt + 1}, sub-attempt {sub_attempt + 1} for paragraph {idx + 1}: {str(e)}")
+                    logger.error(f"Error during paragraph {idx + 1}, attempt {attempt + 1}, sub-attempt {sub_attempt + 1}: {str(e)}")
                     sub_attempt += 1
                     time.sleep(0.5 * (2 ** sub_attempt))
 
             if valid_paraphrase_found:
                 break
+
             time.sleep(1)
 
         if not valid_paraphrase_found:
             if best_paraphrase:
-                print(f"✅ Picked fallback from attempt {best_attempt}")
+                print(f"✅ Paragraph {idx + 1} picked fallback from attempt {best_attempt}")
                 print(best_metadata + "\n")
-                final_paraphrased.append(clean_description(best_paraphrase))
+                final_paraphrased.append(best_paraphrase)
             else:
-                print(f"❌ Paragraph {idx + 1} fallback to original.\n")
+                print(f"❌ Paragraph {idx + 1} fallback to original paragraph.")
                 final_paraphrased.append(para)
 
-    return "\n\n".join(final_paraphrased)
+    result = "\n".join(final_paraphrased)
+    if not result.strip():
+        logger.warning("No valid paraphrased text produced, returning original.")
+        return text
+    return result
 
 def paraphrase_strict_tagline(company_tagline, max_attempts=5):
     clean_text = sanitize_text(company_tagline)
@@ -667,7 +674,7 @@ def paraphrase_strict_description(text, max_attempts=2, max_sub_attempts=2):
             "Job description paragraph professionally",
             "Paraphrase", "Paraphrased", "Paraphrase the following",
             "Paraphrase the job description", "Paraphrasing",
-            "Job description", "Job description paragraph",
+            "Job description", "Job description paragraph"
         ]
         para_lower = para.lower()
         for phrase in prompt_phrases:
@@ -747,9 +754,9 @@ def paraphrase_strict_description(text, max_attempts=2, max_sub_attempts=2):
                             do_sample=True,
                             top_k=40,
                             top_p=0.95,
-                            temperature=0.9 + 0.1 * sub_attempt,
-                            repetition_penalty=1.1,
-                            no_repeat_ngram_size=2,
+                            temperature=0.8 + 0.1 * sub_attempt,
+                            repetition_penalty=1.2,
+                            no_repeat_ngram_size=3,
                             num_return_sequences=MAX_RETURN_SEQUENCES
                         )
 
@@ -769,21 +776,16 @@ def paraphrase_strict_description(text, max_attempts=2, max_sub_attempts=2):
                             logger.info(f"❌ Rejected due to prompt echo (phrase: '{banned_phrase}' in context: '{context_snippet}' in output: \"{paraphrased}\")")
                             continue
 
-                        word_count = len(paraphrased.split())
-                        similarity = is_good_paraphrase(para, paraphrased)
-                        score = (similarity + (1 - abs(word_count - target_word_count) / max(target_word_count, 1))) / 2
-
-                        first_sentence = paraphrased.split(".")[0].strip()
-                        original_first = para.split(".")[0].strip()
-                        first_diff = not first_sentence.lower().startswith(original_first.lower())
+                        score, sim, wc = score_paraphrase(para, paraphrased, target_word_count)
+                        first_diff = not paraphrased.lower().startswith(para.lower())
 
                         print(f"📝 Attempt {attempt + 1}.{sub_attempt + 1}, Option {option_index + 1}")
-                        print(f"↪ Words: {word_count}, Sim: {similarity:.2f}, Score: {score:.2f}, First sentence different: {first_diff}")
-                        print(f"→ First sentence: {first_sentence}\n")
+                        print(f"↪ Words: {wc}, Sim: {sim:.2f}, Score: {score:.2f}, First different: {first_diff}")
+                        print(f"→ Paraphrased: {paraphrased}\n")
 
                         is_valid = (
-                            min_wc <= word_count <= max_wc
-                            and similarity >= (0.65 if target_word_count > 10 else 0.6)
+                            min_wc <= wc <= max_wc
+                            and sim >= (0.65 if target_word_count > 10 else 0.6)
                             and first_diff
                             and is_grammatically_correct(paraphrased)
                         )
@@ -799,8 +801,8 @@ def paraphrase_strict_description(text, max_attempts=2, max_sub_attempts=2):
                             best_paraphrase = paraphrased
                             best_attempt = f"{attempt + 1}.{sub_attempt + 1}, option {option_index + 1}"
                             best_metadata = (
-                                f"↪ Words: {word_count}, Sim: {similarity:.2f}, Score: {score:.2f}, First sentence different: {first_diff}\n"
-                                f"→ First sentence: {first_sentence}"
+                                f"↪ Words: {wc}, Sim: {sim:.2f}, Score: {score:.2f}, First different: {first_diff}\n"
+                                f"→ Paraphrased: {paraphrased}"
                             )
 
                     if not valid_paraphrase_found:
@@ -827,510 +829,174 @@ def paraphrase_strict_description(text, max_attempts=2, max_sub_attempts=2):
 
     return "\n\n".join(final_paraphrased)
 
-def load_kenya_processed_job_ids():
-    if not os.path.exists(PROCESSED_IDS_FILE):
-        logger.info(f"{PROCESSED_IDS_FILE} does not exist. Initializing empty sets.")
-        return set(), set(), set()
+def paraphrase_title_and_description(title, description, index, max_attempts=5):
     try:
-        df = pd.read_csv(PROCESSED_IDS_FILE)
-        required_columns = ['Job ID', 'Job URL', 'Company Name', 'URL Page', 'Job Number']
-        for col in required_columns:
-            if col not in df.columns:
-                df[col] = ''
-        job_ids = set(df['Job ID'].fillna('').astype(str).tolist())
-        job_urls = set(df['Job URL'].fillna('').astype(str).tolist())
-        company_names = set(df['Company Name'].fillna('').astype(str).tolist())
-        logger.info(f"Loaded {len(job_ids)} Job IDs, {len(job_urls)} Job URLs, and {len(company_names)} Company Names from {PROCESSED_IDS_FILE}")
-        return job_ids, job_urls, company_names
+        rewritten_title = paraphrase_strict_title(title, max_attempts=max_attempts)
+        rewritten_description = paraphrase_strict_description(description, max_attempts=2)
+        combined = f"{rewritten_title}\n\n{rewritten_description}"
+        return combined, rewritten_title, rewritten_description
     except Exception as e:
-        logger.error(f"Error reading {PROCESSED_IDS_FILE}: {str(e)}. Initializing empty sets.")
-        print(f"Error reading {PROCESSED_IDS_FILE}: {str(e)}. Using empty sets.")
-        return set(), set(), set()
+        logger.error(f"Error paraphrasing for index {index}: {str(e)}")
+        return title + "\n\n" + description, title, description
 
-def save_processed_job_id(job_id, job_url, company_name, url_page, job_number):
-    try:
-        job_id = str(job_id)
-        job_url = sanitize_text(str(job_url), is_url=True)
-        company_name = sanitize_text(str(company_name))
-        url_page = str(url_page)
-        job_number = str(job_number)
-        new_row = pd.DataFrame({
-            'Job ID': [job_id],
-            'Job URL': [job_url],
-            'Company Name': [company_name],
-            'URL Page': [url_page],
-            'Job Number': [job_number]
-        })
-        if os.path.exists(PROCESSED_IDS_FILE):
-            df = pd.read_csv(PROCESSED_IDS_FILE)
-            if not df.empty and job_id not in df['Job ID'].astype(str).values:
-                df = pd.concat([df, new_row], ignore_index=True)
-                df.to_csv(PROCESSED_IDS_FILE, index=False)
-            elif df.empty:
-                new_row.to_csv(PROCESSED_IDS_FILE, index=False)
-        else:
-            new_row.to_csv(PROCESSED_IDS_FILE, index=False)
-        logger.info(f"Saved Job ID {job_id}, URL {job_url}, Company {company_name}, Page {url_page}, Job Number {job_number} to {PROCESSED_IDS_FILE}")
-    except Exception as e:
-        logger.error(f"Error saving Job ID {job_id}: {str(e)}")
-        print(f"Error saving Job ID {job_id}: {str(e)}")
-        raise
-
-def validate_application_method(value, is_email=False):
-    if not value:
+def validate_application_method(application, is_email=False):
+    """Validate application method (URL or email)."""
+    if not application:
         return False
     if is_email:
-        return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', value))
-    return bool(re.match(r'^https?://[^\s/$.?#].[^\s]*$', value))
+        return bool(re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', application))
+    try:
+        parsed = urlparse(application)
+        if not parsed.scheme or not parsed.netloc:
+            return False
+        excluded_domains = ['mysalaryscale.com', 'myjobmag.co.ke', 'linkedin.com', 'twitter.com', 'facebook.com']
+        if any(domain in parsed.netloc.lower() for domain in excluded_domains):
+            return False
+        return True
+    except ValueError:
+        return False
 
 def clean_application_url(url):
-    if not url:
+    """Clean application URL by removing query parameters and fragments."""
+    try:
+        parsed = urlparse(url)
+        cleaned = urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+        return cleaned
+    except ValueError as e:
+        logger.error(f"Error cleaning URL {url}: {str(e)}")
         return url
-    try:
-        session = requests.Session()
-        retries = Retry(total=3, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
-        session.mount("https://", HTTPAdapter(max_retries=retries))
-        response = session.get(url, headers=HEADERS, timeout=10, allow_redirects=True)
-        response.raise_for_status()
-        final_url = response.url
-        parsed_url = urlparse(final_url)
-        query_params = parse_qs(parsed_url.query)
-        query_params.pop('utm_source', None)
-        cleaned_query = urlencode(query_params, doseq=True)
-        cleaned_url = urlunparse((
-            parsed_url.scheme,
-            parsed_url.netloc,
-            parsed_url.path,
-            parsed_url.params,
-            cleaned_query,
-            parsed_url.fragment
-        ))
-        logger.debug(f"Cleaned application URL: {final_url} -> {cleaned_url}")
-        return cleaned_url
-    except Exception as e:
-        logger.error(f"Error processing application URL {url}: {str(e)}")
-        return url
-
-def upload_logo_to_media_library(logo_url, auth, headers):
-    if not logo_url or not logo_url.startswith('http') or not (logo_url.lower().endswith('.png') or logo_url.lower().endswith('.jpg') or logo_url.lower().endswith('.jpeg')):
-        logger.warning(f"Invalid logo URL or format: {logo_url}")
-        return None
-    try:
-        response = requests.get(logo_url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        content_type = response.headers.get('content-type', 'image/jpeg')
-        filename = logo_url.split('/')[-1] or 'company_logo.jpg'
-        media_headers = headers.copy()
-        media_headers['Content-Disposition'] = f'attachment; filename={filename}'
-        media_headers['Content-Type'] = content_type
-        response = requests.post(WP_MEDIA_URL, headers=media_headers, data=response.content, auth=(WP_USERNAME, WP_APP_PASSWORD), timeout=10, verify=False)
-        response.raise_for_status()
-        media = response.json()
-        attachment_id = media.get('id')
-        logger.info(f"Uploaded logo {logo_url} to media library, Attachment ID: {attachment_id}")
-        return attachment_id
-    except RequestException as e:
-        logger.error(f"Error uploading logo {logo_url}: {str(e)}")
-        return None
-
-def extract_job_title(job_title):
-    patterns = [
-        (r'The most accurate and professional paraphrase would be:\s*(["“])?([^”"\n]+)(["”])?', 2),
-        (r'paraphrase would be:\s*(["“])?([^”"\n]+)(["”])?', 2),
-        (r'["“]([^”"]+)["”]\s*This paraphrase maintains the original meaning', 1),
-        (r'A good paraphrase would be:\s*["“]([^”"]+)["”]', 1),
-        (r'["“]([^”]+)["”]', 1),
-        (r'–\s*([^-]+)\s*–', 1),
-        (r'Here’s a :\s*(.+)', 1),
-        (r'\* Job title:\s*([^\n*]+)', 1)
-    ]
-    for pattern, group in patterns:
-        match = re.search(pattern, job_title, re.IGNORECASE)
-        if match:
-            extracted = match.group(group).strip()
-            words = extracted.split()
-            if len(words) > 30:
-                words = words[:30]
-                while words and words[-1].lower() in {'and', 'or', 'at', 'in', 'of', 'for', 'with'}:
-                    words.pop()
-                extracted = ' '.join(words)
-            logger.debug(f"Matched pattern '{pattern}' for job title, extracted: {extracted}")
-            return extracted
-    extracted = job_title.strip()
-    words = extracted.split()
-    if len(words) > 30:
-        words = words[:30]
-        while words and words[-1].lower() in {'and', 'or', 'at', 'in', 'of', 'for', 'with'}:
-            words.pop()
-        extracted = ' '.join(words)
-    logger.debug(f"No pattern matched, using fallback extracted title: {extracted}")
-    return extracted
-
-def clean_description(text):
-    """Clean paraphrased text by removing verbose phrases and normalizing."""
-    verbose_phrases = [
-        r'Paraphrased Version',
-        r'Paraphrased Job Description for',
-        r'This paraphrased version maintains the original content while improving clarity and readability\.'
-    ]
-    for phrase in verbose_phrases:
-        text = re.sub(phrase, '', text, flags=re.IGNORECASE).strip()
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\*\*', '', text)
-    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text).strip()
-    text = re.sub(r'[\r\t\f\v]', '', text)
-    try:
-        matches = tool.check(text)
-        corrected_text = language_tool_python.utils.correct(text, matches)
-        return corrected_text
-    except Exception as e:
-        logger.error(f"Error in grammar correction: {str(e)}")
-        return text
-
-def print_word_by_word(text, delay=0.05):
-    text = re.sub(r'\*\*', '', text)
-    print("\nStep 3: API Response (Word-by-Word)")
-    print("-" * 30)
-    print("Rewritten Text: ")
-    paragraphs = text.split('\n\n')
-    for para in paragraphs:
-        words = para.split()
-        for word in words:
-            print(f"{word} ", end="", flush=True)
-        time.sleep(delay)
-        print('\n')
-    return text
-
-def paraphrase_title_and_description(title, description, index, max_attempts=5):
-    print(f"\n=== Processing Article #{index + 1} ===")
-    print("Step 1: Original Article Text")
-    print("-" * 30)
-    print(f"Original Job Title: {title}")
-    print(f"Original Job Description: {description}")
-
-    print("\nStep 2: Paraphrasing Title and Description Separately")
-    print("-" * 30)
-
-    try:
-        print(f"Paraphrasing Job Title: {title}")
-        paraphrased_title = paraphrase_strict_title(title, max_attempts=max_attempts)
-        logger.debug(f"Raw paraphrased title: {paraphrased_title}")
-        print(f"Paraphrased Job Title: {paraphrased_title}")
-
-        words = paraphrased_title.split()
-        if len(words) > 30:
-            words = words[:30]
-            while words and words[-1].lower() in {'and', 'or', 'at', 'in', 'of', 'for', 'with'}:
-                words.pop()
-            paraphrased_title = ' '.join(words)
-            logger.debug(f"Truncated paraphrased title: {paraphrased_title}")
-
-        rewritten_title = paraphrased_title
-
-    except Exception as e:
-        logger.error(f"Error paraphrasing title: {str(e)}. Falling back to original title.")
-        print(f"Error paraphrasing title: {str(e)}. Falling back to original title.")
-        rewritten_title = title
-
-    try:
-        print(f"Paraphrasing Job Description: {description}")
-        paraphrased_description = paraphrase_strict_description(description, max_attempts=max_attempts)
-        logger.debug(f"Raw paraphrased description: {paraphrased_description}")
-        print(f"Paraphrased Job Description: {paraphrased_description}")
-        rewritten_description = clean_description(paraphrased_description)
-
-    except Exception as e:
-        logger.error(f"Error paraphrasing description: {str(e)}. Falling back to original description.")
-        print(f"Error paraphrasing description: {str(e)}. Falling back to original description.")
-        rewritten_description = description
-
-    print(f"\nStep 3: Final Paraphrased Output")
-    print("-" * 30)
-    print(f"Extracted Paraphrased Job Title: {rewritten_title}")
-    print(f"Extracted Paraphrased Job Description: {rewritten_description}")
-
-    return print_word_by_word(f"Job Title: {rewritten_title}\n\nJob Description:\n{rewritten_description}"), rewritten_title, rewritten_description
-
-def get_region_term_id(location_value, auth, headers):
-    taxonomy_url = "https://kenya.mimusjobs.com/wp-json/wp/v2/job_listing_region"
-    location_slug = location_value.lower().replace(' ', '-')
-    try:
-        response = requests.get(f"{taxonomy_url}?slug={location_slug}", headers=headers, timeout=10, verify=False)
-        response.raise_for_status()
-        terms = response.json()
-        if terms:
-            logger.debug(f"Found existing region term: {terms[0]['id']} for {location_value}")
-            return terms[0]['id']
-    except RequestException as e:
-        logger.error(f"Error fetching region term for {location_value}: {str(e)}")
-    try:
-        term_data = {"name": location_value, "slug": location_slug}
-        response = requests.post(taxonomy_url, json=term_data, headers=headers, auth=(WP_USERNAME, WP_APP_PASSWORD), timeout=10, verify=False)
-        response.raise_for_status()
-        term = response.json()
-        logger.debug(f"Created new region term: {term['id']} for {location_value}")
-        return term['id']
-    except RequestException as e:
-        logger.error(f"Error creating region term for {location_value}: {str(e)}")
-        return None
-
-def get_job_type_term_id(job_type_value, auth, headers):
-    taxonomy_url = "https://kenya.mimusjobs.com/wp-json/wp/v2/job_listing_type"
-    job_type_slug = job_type_value.lower().replace(' ', '-')
-    try:
-        response = requests.get(f"{taxonomy_url}?slug={job_type_slug}", headers=headers, timeout=10, verify=False)
-        response.raise_for_status()
-        terms = response.json()
-        if terms:
-            logger.debug(f"Found existing job type term: {terms[0]['id']} for {job_type_value}")
-            return terms[0]['id']
-    except RequestException as e:
-        logger.error(f"Error fetching job type term for {job_type_value}: {str(e)}")
-    try:
-        term_data = {"name": job_type_value, "slug": job_type_slug}
-        response = requests.post(taxonomy_url, json=term_data, headers=headers, auth=(WP_USERNAME, WP_APP_PASSWORD), timeout=10, verify=False)
-        response.raise_for_status()
-        term = response.json()
-        logger.debug(f"Created new job type term: {term['id']} for {job_type_value}")
-        return term['id']
-    except RequestException as e:
-        logger.error(f"Error creating job type term for {job_type_value}: {str(e)}")
-        return None
-
-def initialize_job_type_terms(auth, headers):
-    taxonomy_url = "https://kenya.mimusjobs.com/wp-json/wp/v2/job_listing_type"
-    for job_type, slug in JOB_TYPE_MAPPING.items():
-        try:
-            response = requests.get(f"{taxonomy_url}?slug={slug}", headers=headers, timeout=10, verify=False)
-            response.raise_for_status()
-            terms = response.json()
-            if not terms:
-                term_data = {"name": job_type, "slug": slug}
-                response = requests.post(taxonomy_url, json=term_data, headers=headers, auth=(WP_USERNAME, WP_APP_PASSWORD), timeout=10, verify=False)
-                response.raise_for_status()
-                term = response.json()
-                logger.info(f"Initialized job type term: {term['id']} for {job_type}")
-        except RequestException as e:
-            logger.error(f"Error initializing job type term {job_type}: {str(e)}")
-
-def save_company_to_wordpress(index, company_data):
-    auth_string = f"{WP_USERNAME}:{WP_APP_PASSWORD}"
-    auth = base64.b64encode(auth_string.encode()).decode()
-    headers = {"Authorization": f"Basic {auth}", "Content-Type": "application/json"}
-    company_name = sanitize_text(company_data.get("company_name", "Unknown Company"))
-    logo_url = sanitize_text(company_data.get("company_logo", []), is_url=True)
-    logo_url = logo_url[0] if isinstance(logo_url, list) and logo_url else ""
-    attachment_id = None
-    if logo_url:
-        attachment_id = upload_logo_to_media_library(logo_url, auth, headers)
-    else:
-        logger.info(f"No valid logo URL for company {company_name}. Skipping logo upload.")
-    company_details = company_data.get("company_details", "")
-    if company_details:
-        print(f"\nParaphrasing Company Details for {company_name}")
-        print("-" * 30)
-        print(f"Original Company Details: {company_details}")
-        paraphrased_details = paraphrase_strict_company(company_details, max_attempts=5)
-
-        paraphrased_details = re.sub(r'Job Title:\s*[^\n]*\n*', '', paraphrased_details, flags=re.IGNORECASE)
-        paraphrased_details = re.sub(r'Job Description:\s*', '', paraphrased_details, flags=re8222.IGNORECASE)
-        sentences = nltk.sent_tokenize(paraphrased_details)
-        paragraphs = []
-        current_paragraph = []
-        sentence_count = 0
-        for sentence in sentences:
-            current_paragraph.append(sentence)
-            sentence_count += 1
-            if sentence_count >= 3:
-                paragraphs.append(' '.join(current_paragraph))
-                current_paragraph = []
-                sentence_count = 0
-        if current_paragraph:
-            paragraphs.append(' '.join(current_paragraph))
-        paraphrased_details = '\n\n'.join(paragraphs)
-        print(f"Paraphrased Company Details: {paraphrased_details}")
-        company_details = clean_description(paraphrased_details)
-    else:
-        logger.warning(f"No company details to paraphrase for {company_name}")
-        company_details = ""
-    company_tagline = sanitize_text(company_data.get("company_details", ""))
-    if company_tagline:
-        print(f"\nParaphrasing Company Tagline for {company_name}")
-        print("-" * 30)
-        print(f"Original Company Tagline: {company_tagline}")
-        paraphrased_tagline = paraphrase_strict_tagline(company_tagline, max_attempts=5)
-        paraphrased_tagline = re.sub(r'Job Title:\s*[^\n]*\n*', '', paraphrased_tagline, flags=re.IGNORECASE)
-        paraphrased_tagline = re.sub(r'Job Description:\s*', '', paraphrased_tagline, flags=re.IGNORECASE)
-        print(f"Paraphrased Company Tagline: {paraphrased_tagline}")
-        company_tagline = clean_description(paraphrased_tagline)
-    else:
-        logger.warning(f"No company tagline to paraphrase for {company_name}")
-        company_tagline = ""
-    check_url = f"{WP_COMPANY_URL}?slug={company_name.lower().replace(' ', '-')}"
-    session = requests.Session()
-    retries = Retry(total=3, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET", "POST"])
-    session.mount("https://", HTTPAdapter(max_retries=retries))
-    try:
-        response = session.get(check_url, headers=headers, timeout=10, verify=False)
-        response.raise_for_status()
-        posts = response.json()
-        if posts:
-            post = posts[0]
-            logger.info(f"Company {company_name} already exists: Post ID {post.get('id')}, URL {post.get('link')}")
-            return post.get("id"), post.get("link")
-    except RequestException as e:
-        logger.warning(f"Error checking for existing company {company_name}: {str(e)}. Proceeding to create new company.")
-    post_data = {
-        "title": company_name,
-        "content": company_details,
-        "status": "publish",
-        "featured_media": attachment_id if attachment_id else 0,
-        "meta": {
-            "_company_name": company_name,
-            "_company_logo": str(attachment_id) if attachment_id else "",
-            "_company_industry": sanitize_text(company_data.get("company_industry", "")),
-            "_company_founded": sanitize_text(company_data.get("company_founded", "")),
-            "_company_type": sanitize_text(company_data.get("company_type", "")),
-            "_company_website": sanitize_text(company_data.get("company_website", ""), is_url=True),
-            "_company_address": sanitize_text(company_data.get("company_address", "")),
-            "_company_tagline": company_tagline
-        }
-    }
-    logger.debug(f"Sending company payload to WordPress for company {company_name}: {json.dumps(post_data, indent=2)}")
-    try:
-        response = session.post(WP_COMPANY_URL, json=post_data, headers=headers, timeout=15, verify=False)
-        response.raise_for_status()
-        post = response.json()
-        logger.info(f"Successfully posted company {company_name} to WordPress: Post ID {post.get('id')}, URL {post.get('link')}")
-        print(f"\nStep 5: Published Company to WordPress")
-        print("-" * 30)
-        print(f"Company Post ID: {post.get('id')}")
-        print(f"Company Post URL: {post.get('link')}")
-        return post.get("id"), post.get("link")
-    except RequestException as e:
-        logger.error(f"Failed to post company {company_name}: {str(e)}")
-        print(f"Error publishing company {company_name}: {e}")
-        return None, None
-
-def save_article_to_wordpress(index, job_data, rewritten_title, rewritten_description, application):
-    auth_string = f"{WP_USERNAME}:{WP_APP_PASSWORD}"
-    auth = base64.b64encode(auth_string.encode()).decode()
-    headers = {
-        "Authorization": f"Basic {auth}",
-        "Content-Type": "application/json"
-    }
-    initialize_job_type_terms(auth, headers)
-    location_value = sanitize_text(job_data.get("Location", "Remote"))
-    job_type_value = sanitize_text(job_data.get("Job Type", "Full-time"))
-    job_type_slug = JOB_TYPE_MAPPING.get(job_type_value, "full-time").lower()
-    logo_url = sanitize_text(job_data.get("Company Logo", ""), is_url=True)
-    company_name = sanitize_text(job_data.get("Company", "Unknown Company"))
-    job_id = str(job_data.get("Job ID", ""))
-    job_url = sanitize_text(job_data.get("Job URL", ""), is_url=True)
-    is_email = validate_application_method(application, is_email=True)
-    is_url = validate_application_method(application, is_email=False)
-    if not (is_email or is_url):
-        logger.warning(f"Invalid application method for job {index + 1} (Job ID: {job_id}): {application}. Setting to empty.")
-        application = ""
-    title_slug = rewritten_title.lower().replace(' ', '-') if rewritten_title and not rewritten_title.startswith("Error:") else sanitize_text(job_data.get("Job Title", f"job-listing-{index + 1}")).lower().replace(' ', '-')
-    check_url = f"{WP_URL}?slug={title_slug}"
-    session = requests.Session()
-    retries = Retry(total=0, backoff_factor=2, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
-    session.mount("https://", HTTPAdapter(max_retries=retries))
-    try:
-        response = session.get(check_url, headers=headers, timeout=10, verify=False)
-        response.raise_for_status()
-        posts = response.json()
-        if posts:
-            post = posts[0]
-            logger.info(f"Job {index + 1} (Job ID: {job_id}) already exists in WordPress: Post ID {post.get('id')}, URL {post.get('link')}")
-            print(f"Skipping job {index + 1}: Already exists in WordPress with Post ID {post.get('id')}, URL {post.get('link')}")
-            save_processed_job_id(job_id, job_url, company_name)
-            return post.get("id"), post.get("link")
-    except RequestException as e:
-        logger.warning(f"Error checking for existing job {index + 1}: {str(e)}. Proceeding to create new post.")
-    attachment_id = upload_logo_to_media_library(logo_url, auth, headers)
-    region_term_id = get_region_term_id(location_value, auth, headers)
-    job_type_term_id = get_job_type_term_id(job_type_value, auth, headers)
-    if company_name == "Unknown Company":
-        logger.warning(f"Using fallback company name 'Unknown Company' for job {index + 1}")
-    post_data = {
-        "title": rewritten_title if rewritten_title and not rewritten_title.startswith("Error:") else sanitize_text(job_data.get("Job Title", f"Job Listing {index + 1}")),
-        "content": rewritten_description if rewritten_description and not rewritten_description.startswith("Error:") else sanitize_text(job_data.get("Job Description", "")),
-        "status": "publish",
-        "featured_media": attachment_id if attachment_id else 0,
-        "meta": {
-            "_job_title": rewritten_title if rewritten_title and not rewritten_title.startswith("Error:") else sanitize_text(job_data.get("Job Title", f"Job Listing {index + 1}")),
-            "_job_location": location_value,
-            "_job_type": job_type_slug,
-            "_job_description": rewritten_description if rewritten_description and not rewritten_description.startswith("Error:") else sanitize_text(job_data.get("Job Description", "")),
-            "_application": sanitize_text(application, is_url=is_url, is_email=is_email),
-            "_job_salary": sanitize_text(job_data.get("job_salary", "")),
-            "_job_salary_currency": sanitize_text(job_data.get("job_salary_currency", "")),
-            "_job_salary_unit": sanitize_text(job_data.get("job_salary_unit", "")),
-            "_company_name": company_name,
-            "_company_website": sanitize_text(job_data.get("Company Website", ""), is_url=True),
-            "_company_tagline": sanitize_text(job_data.get("Company Details", "")),
-            "_company_video": sanitize_text(job_data.get("company_video", ""), is_url=True),
-            "_company_twitter": sanitize_text(job_data.get("company_twitter", ""), is_url=True),
-            "_company_logo": str(attachment_id) if attachment_id else "",
-            "_job_id": job_id
-        }
-    }
-    if region_term_id:
-        post_data["job_listing_region"] = [region_term_id]
-    if job_type_term_id:
-        post_data["job_listing_type"] = [job_type_term_id]
-    logger.debug(f"Sending job payload to WordPress for job {index + 1}: {json.dumps(post_data, indent=2)}")
-    max_retries = 3
-    for attempt in range(max_retries):
-        response = None
-        try:
-            response = session.post(WP_URL, json=post_data, headers=headers, timeout=15, verify=False)
-            response.raise_for_status()
-            post = response.json()
-            logger.info(f"Successfully posted job {index + 1} to WordPress: Post ID {post.get('id')}, URL {post.get('link')}")
-            print(f"\nStep 4: Published Job to WordPress")
-            print("-" * 30)
-            print(f"Job Post ID: {post.get('id')}")
-            print(f"Job Post URL: {post.get('link')}")
-            save_processed_job_id(job_id, job_url, company_name)
-            return post.get("id"), post.get("link")
-        except RequestException as e:
-            logger.error(f"Attempt {attempt + 1} failed for job {index + 1}: {e}, Status: {response.status_code if response else 'None'}, Response: {response.text if response else 'None'}")
-            print(f"\nStep 4: Attempt {attempt + 1} failed for job {index + 1}: {e}")
-            print(f"Response: {response.text if response else 'No response'}")
-            print(f"Status Code: {response.status_code if response else 'No status code'}")
-            print(f"Response Headers: {response.headers if response else 'No headers'}")
-            try:
-                check_response = session.get(check_url, headers=headers, timeout=10, verify=False)
-                if check_response.status_code == 200:
-                    posts = check_response.json()
-                    if posts:
-                        post = posts[0]
-                        logger.info(f"Job {index + 1} (Job ID: {job_id}) was created despite error: Post ID {post.get('id')}, URL {post.get('link')}")
-                        print(f"Job {index + 1} was created despite error: Post ID {post.get('id')}, URL {post.get('link')}")
-                        save_processed_job_id(job_id, job_url, company_name)
-                        return post.get("id"), post.get("link")
-            except RequestException as check_e:
-                logger.error(f"Error checking for existing job after failed POST attempt {attempt + 1}: {check_e}")
-            if attempt < max_retries - 1:
-                logger.info(f"Retrying job {index + 1} after {2 ** attempt} seconds...")
-                time.sleep(2 ** attempt)
-    logger.error(f"Failed to post job {index + 1} after {max_retries} attempts.")
-    print(f"Failed to post job {index + 1} after {max_retries} attempts.")
-    return None, None
 
 def add_three_months_to_date(date_str):
+    """Add three months to a date string and return in the same format."""
     try:
         date_str = re.sub(r'^Posted:\s*', '', date_str.strip())
         date_obj = datetime.strptime(date_str, '%b %d, %Y')
         new_date = date_obj + timedelta(days=90)
-        return new_date.strftime('%Y-%m-%d')
+        return new_date.strftime('%b %d, %Y')
     except ValueError as e:
-        logger.error(f"Invalid date format: {date_str}, Error: {str(e)}")
-        print(f"Invalid date format: {date_str}")
-        return None
+        logger.error(f"Error adding three months to date {date_str}: {str(e)}")
+        return datetime.now().strftime('%b %d, %Y')
+
+def extract_job_title(title):
+    """Extract the job title by removing company name and other noise."""
+    if not title:
+        return ""
+    title = sanitize_text(title)
+    title = re.sub(r'\s+at\s+.*$', '', title, flags=re.IGNORECASE)
+    title = re.sub(r'\s+\(.*?\)$', '', title)
+    title = re.sub(r'\s+\-.*$', '', title)
+    return title.strip()
+
+def save_company_to_wordpress(index, company_data):
+    try:
+        company_name = company_data.get('company_name', 'Unknown Company')
+        if not company_name or company_name == 'Unknown Company':
+            logger.warning(f"Skipping company post for index {index}: Invalid company name")
+            return None, None
+
+        # Generate slug from company name
+        slug = company_name.lower().replace(' ', '-').replace('&', 'and')
+        slug = re.sub(r'[^a-z0-9-]', '', slug)
+
+        # Check if company post already exists by slug
+        headers = {
+            'Authorization': 'Basic ' + base64.b64encode(f"{WP_USERNAME}:{WP_APP_PASSWORD}".encode()).decode('utf-8'),
+            'User-Agent': HEADERS['User-Agent']
+        }
+        response = requests.get(f"{WP_COMPANY_URL}?slug={slug}", headers=headers, timeout=10)
+        response.raise_for_status()
+        existing_posts = response.json()
+        if existing_posts:
+            logger.info(f"Company {company_name} already exists with slug {slug}. Skipping post.")
+            print(f"Company {company_name} already exists. Post ID: {existing_posts[0]['id']}, URL: {existing_posts[0]['link']}")
+            return existing_posts[0]['id'], existing_posts[0]['link']
+
+        # Prepare company post data
+        company_post_data = {
+            "title": company_name,
+            "content": company_data.get('company_details', ''),
+            "status": "publish",
+            "slug": slug,
+            "meta": {
+                "industry": company_data.get('company_industry', ''),
+                "founded": company_data.get('company_founded', ''),
+                "type": company_data.get('company_type', ''),
+                "website": company_data.get('company_website', ''),
+                "address": company_data.get('company_address', '')
+            }
+        }
+
+        # Post company to WordPress
+        response = requests.post(WP_COMPANY_URL, headers=headers, json=company_post_data, timeout=10)
+        response.raise_for_status()
+        post = response.json()
+        post_id = post.get('id')
+        post_url = post.get('link')
+        logger.info(f"Posted company {company_name} to WordPress. Post ID: {post_id}, URL: {post_url}")
+
+        # Handle company logo if available
+        company_logo = company_data.get('company_logo', [''])[0]
+        if company_logo:
+            try:
+                logo_response = requests.get(company_logo, headers=HEADERS, timeout=10)
+                logo_response.raise_for_status()
+                logo_filename = f"{slug}-logo{os.path.splitext(company_logo)[1]}"
+                media_headers = headers.copy()
+                media_headers['Content-Type'] = 'image/jpeg' if company_logo.endswith('.jpg') or company_logo.endswith('.jpeg') else 'image/png'
+                media_headers['Content-Disposition'] = f'attachment; filename={logo_filename}'
+                media_response = requests.post(WP_MEDIA_URL, headers=media_headers, data=logo_response.content, timeout=10)
+                media_response.raise_for_status()
+                media = media_response.json()
+                media_id = media.get('id')
+                requests.post(f"{WP_COMPANY_URL}/{post_id}", headers=headers, json={"featured_media": media_id}, timeout=10)
+                logger.info(f"Uploaded logo for company {company_name}. Media ID: {media_id}")
+            except RequestException as e:
+                logger.error(f"Error uploading logo for company {company_name}: {str(e)}")
+
+        return post_id, post_url
+    except RequestException as e:
+        logger.error(f"Error posting company {company_name} to WordPress: {str(e)}")
+        print(f"Error posting company {company_name}: {str(e)}")
+        return None, None
+
+def save_article_to_wordpress(index, job_data, rewritten_title, rewritten_description, application):
+    try:
+        headers = {
+            'Authorization': 'Basic ' + base64.b64encode(f"{WP_USERNAME}:{WP_APP_PASSWORD}".encode()).decode('utf-8'),
+            'User-Agent': HEADERS['User-Agent']
+        }
+        job_type_slug = JOB_TYPE_MAPPING.get(job_data.get('Job Type', ''), 'full-time')
+        post_data = {
+            "title": rewritten_title,
+            "content": rewritten_description,
+            "status": "publish",
+            "meta": {
+                "job_type": job_type_slug,
+                "location": job_data.get('Location', ''),
+                "qualifications": job_data.get('Qualifications', ''),
+                "experience": job_data.get('Experience', ''),
+                "field": job_data.get('Field', ''),
+                "date_posted": job_data.get('Date Posted', ''),
+                "deadline": job_data.get('Deadline', ''),
+                "application": application,
+                "company": job_data.get('Company', 'Unknown Company'),
+                "company_logo": job_data.get('Company Logo', ''),
+                "company_website": job_data.get('Company Website', ''),
+                "job_url": job_data.get('Job URL', ''),
+                "job_id": job_data.get('Job ID', '')
+            }
+        }
+        response = requests.post(WP_URL, headers=headers, json=post_data, timeout=10)
+        response.raise_for_status()
+        post = response.json()
+        post_id = post.get('id')
+        post_url = post.get('link')
+        logger.info(f"Posted job {index} to WordPress. Post ID: {post_id}, URL: {post_url}")
+        return post_id, post_url
+    except RequestException as e:
+        logger.error(f"Error posting job {index} to WordPress: {str(e)}")
+        print(f"Error posting job {index}: {str(e)}")
+        return None, None
 
 def scrape_job_details(job_url):
     try:
@@ -1343,6 +1009,9 @@ def scrape_job_details(job_url):
         trimmed_parts = [part.strip() for part in parts]
         job_title_clean = trimmed_parts[0] if trimmed_parts else job_title
         company_name = trimmed_parts[1] if len(trimmed_parts) > 1 else None
+        if not company_name:
+            logo_elem = soup.select_one('div.company-logo > img')
+            company_name = logo_elem.get('alt', '').strip() if logo_elem and logo_elem.get('alt') else None
         if not company_name:
             company_name_elem = soup.select_one('#wrap-comp-jobs > div.company-jobs > h1') or soup.select_one('h1.company-name') or soup.select_one('div.company-info > h2')
             company_name = company_name_elem.text.replace("Recruitment", "").strip() if company_name_elem else "Unknown Company"
@@ -1465,12 +1134,60 @@ def scrape_job_details(job_url):
         logger.error(f"Error scraping job details from {job_url}: {str(e)}")
         return None, None
 
+def load_kenya_processed_job_ids():
+    if not os.path.exists(PROCESSED_IDS_FILE):
+        logger.info(f"{PROCESSED_IDS_FILE} does not exist. Initializing empty sets.")
+        return set(), set(), set()
+    try:
+        df = pd.read_csv(PROCESSED_IDS_FILE)
+        required_columns = ['Job ID', 'Job URL', 'Company Name', 'URL Page', 'Job Number']
+        for col in required_columns:
+            if col not in df.columns:
+                df[col] = ''
+        job_ids = set(df['Job ID'].fillna('').astype(str).tolist())
+        job_urls = set(df['Job URL'].fillna('').astype(str).tolist())
+        company_names = set(df['Company Name'].fillna('').astype(str).tolist())
+        logger.info(f"Loaded {len(job_ids)} Job IDs, {len(job_urls)} URLs, and {len(company_names)} companies")
+        return job_ids, job_urls, company_names
+    except Exception as e:
+        logger.error(f"Error reading {PROCESSED_IDS_FILE}: {str(e)}")
+        print(f"Error reading {PROCESSED_IDS_FILE}: {str(e)}. Using empty sets.")
+        return set(), set(), set()
+
+def save_processed_job_id(job_id, job_url, company_name, url_page, job_number):
+    try:
+        job_id = str(job_id)
+        job_url = sanitize_text(str(job_url), is_url=True)
+        company_name = sanitize_text(str(company_name))
+        url_page = str(url_page)
+        job_number = str(job_number)
+        new_row = pd.DataFrame({
+            'Job ID': [job_id],
+            'Job URL': [job_url],
+            'Company Name': [company_name],
+            'URL Page': [url_page],
+            'Job Number': [job_number]
+        })
+        if os.path.exists(PROCESSED_IDS_FILE):
+            df = pd.read_csv(PROCESSED_IDS_FILE)
+            if not df.empty and job_id not in df['Job ID'].astype(str).values:
+                df = pd.concat([df, new_row], ignore_index=True)
+                df.to_csv(PROCESSED_IDS_FILE, index=False)
+            elif df.empty:
+                new_row.to_csv(PROCESSED_IDS_FILE, index=False)
+        else:
+            new_row.to_csv(PROCESSED_IDS_FILE, index=False)
+        logger.info(f"Saved Job ID {job_id}, URL {job_url}, Company {company_name}, Page {url_page}, Job Number {job_number}")
+    except Exception as e:
+        logger.error(f"Error saving Job ID {job_id}: {str(e)}")
+        print(f"Error saving Job ID {job_id}: {str(e)}")
+        raise
+
 def crawl_and_process():
     kenya_processed_job_ids, processed_job_urls, processed_companies = load_kenya_processed_job_ids()
     print(f"Loaded {len(kenya_processed_job_ids)} previously processed Job IDs, {len(processed_job_urls)} URLs, and {len(processed_companies)} companies")
     
-    # Define the page range to scrape (pages 1 to 5)
-    for i in range(1, 6):
+    for i in range(1, 6):  # Scrape pages 1 to 5
         url = f'https://www.myjobmag.co.ke/page/{i}'
         try:
             resp = requests.get(url, headers=HEADERS, timeout=10)
@@ -1512,12 +1229,15 @@ def crawl_and_process():
                 if not job_description or pd.isna(job_description):
                     print(f"Skipping job {job_number}: Empty or invalid job description.")
                     continue
-                if company_name not in processed_companies and company_name != "Unknown Company":
-                    company_post_id, company_post_url = save_company_to_wordpress(index, company_data)
-                    if company_post_id:
-                        print(f"Successfully posted company {company_name} to WordPress. Post ID: {company_post_id}, URL: {company_post_url}")
-                    else:
-                        print(f"Failed to post company {company_name} to WordPress.")
+                if company_name == "Unknown Company" or company_name in processed_companies:
+                    print(f"Skipping job {job_number}: Company {company_name} is either unknown or already processed.")
+                    save_processed_job_id(job_id, job_url, company_name, i, job_number)
+                    continue
+                company_post_id, company_post_url = save_company_to_wordpress(index, company_data)
+                if company_post_id:
+                    print(f"Successfully posted company {company_name} to WordPress. Post ID: {company_post_id}, URL: {company_post_url}")
+                else:
+                    print(f"Failed to post company {company_name} to WordPress.")
                 extracted_title = extract_job_title(job_title)
                 print(f"\nParaphrasing Job Title and Description for Job ID: {job_id}")
                 print("-" * 30)
@@ -1531,6 +1251,7 @@ def crawl_and_process():
                 post_id, post_url = save_article_to_wordpress(index, job_data, rewritten_title, rewritten_description, application)
                 if post_id:
                     print(f"Successfully posted job {job_number} (Job ID: {job_id}, URL: {job_url}) to WordPress. Post ID: {post_id}, URL: {post_url}")
+                    save_processed_job_id(job_id, job_url, company_name, i, job_number)
                 else:
                     print(f"Failed to post job {job_number} (Job ID: {job_id}, URL: {job_url}) to WordPress.")
                     save_processed_job_id(job_id, job_url, company_name, i, job_number)
@@ -1549,9 +1270,9 @@ def main():
         cycle_count += 1
         print(f"\nStarting cycle {cycle_count} of job processing at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         try:
-            crawl_and_process()
+            crawl_and_process()  # Scrape pages 1 to 5
             print(f"Completed cycle {cycle_count}. Waiting 2 hours before restarting...")
-            time.sleep(2 * 60 * 60)  # Wait 2 hours (7200 seconds)
+            time.sleep(2 * 60 * 60)  # Wait 2 hours
         except Exception as e:
             logger.error(f"Error in cycle {cycle_count}: {str(e)}")
             print(f"Error in cycle {cycle_count}: {str(e)}")
